@@ -1,0 +1,7 @@
+flask>=3.0
+requests>=2.31
+google-genai>=1.0
+elevenlabs>=1.0
+Pillow>=10.0
+numpy>=1.24
+pyserial>=3.5

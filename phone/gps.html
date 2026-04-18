@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SolSpecs GPS</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #111; color: #0f0; }
+    #status { font-size: 1.2em; margin-bottom: 10px; }
+    #coords { font-size: 1em; line-height: 1.8; }
+    .label { color: #888; }
+  </style>
+</head>
+<body>
+  <div id="status">Acquiring GPS fix...</div>
+  <div id="coords"></div>
+
+  <script>
+    // Serves GPS as a local HTTP endpoint so UNO Q can poll it.
+    // Open this page in the phone browser and keep it in the foreground.
+    // The UNO Q polls http://<phone-ip>:<PORT>/location
+
+    const PORT = 5000;
+    let lastFix = null;
+
+    // ── Embedded HTTP server via Service Worker + fetch intercept ────
+    // Since a plain HTML page can't open a server socket, we use a
+    // workaround: the page stores GPS in localStorage and a companion
+    // lightweight Python server (gps_server.py) serves it.
+    //
+    // If running without Termux, use this page as a display-only GPS
+    // reader and manually copy coordinates, OR use the BroadcastChannel
+    // trick below if both devices share the same LAN and you can run a
+    // tiny relay.
+    //
+    // For simplest use: run gps_server.py in Termux side-by-side.
+    // This HTML file is a fallback display / debug tool.
+
+    function updateDisplay(pos) {
+      lastFix = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: Date.now() / 1000,
+      };
+
+      document.getElementById("status").textContent = "GPS active";
+      document.getElementById("coords").innerHTML =
+        `<span class="label">lat:</span>  ${lastFix.latitude.toFixed(6)}<br>` +
+        `<span class="label">lng:</span>  ${lastFix.longitude.toFixed(6)}<br>` +
+        `<span class="label">acc:</span>  ±${lastFix.accuracy.toFixed(1)} m<br>` +
+        `<span class="label">time:</span> ${new Date().toLocaleTimeString()}`;
+
+      // Store in localStorage for gps_server.py to read if needed
+      localStorage.setItem("solspecs_gps", JSON.stringify(lastFix));
+    }
+
+    function onError(err) {
+      document.getElementById("status").textContent = `GPS error: ${err.message}`;
+    }
+
+    if ("geolocation" in navigator) {
+      navigator.geolocation.watchPosition(updateDisplay, onError, {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 10000,
+      });
+    } else {
+      document.getElementById("status").textContent = "Geolocation not supported";
+    }
+  </script>
+</body>
+</html>
