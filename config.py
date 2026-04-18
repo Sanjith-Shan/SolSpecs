@@ -13,6 +13,7 @@ MODE = os.environ.get("SOLSPECS_MODE", "simulate")  # "simulate" or "live"
 # ─── API Keys ──────────────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+QUALCOMM_AI_API_KEY = os.environ.get("QUALCOMM_AI_API_KEY", "")
 
 # ─── Heat Stress Thresholds ────────────────────────────────────────
 # OSHA WBGT thresholds for moderate workload
@@ -74,6 +75,13 @@ STATUS_CHECK_ORANGE_MIN = 5
 # ─── Audio ────────────────────────────────────────────────────────
 ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"  # George
 ELEVENLABS_MODEL = "eleven_turbo_v2_5"
+
+# ─── Qualcomm Cloud AI (Cirrascale) ──────────────────────────────
+QUALCOMM_AI_BASE_URL = "https://aisuite.cirrascale.com/apis/v2"
+QUALCOMM_AI_MODEL = "Llama-3.3-70B"              # default: best quality
+QUALCOMM_AI_REASONING_MODEL = "DeepSeek-R1-Distill-Llama-70B"  # trend analysis
+QUALCOMM_AI_FAST_MODEL = "Llama-3.1-8B"          # fallback if latency matters
+QUALCOMM_AI_TIMEOUT = 30.0                        # seconds
 
 # ─── Gemini ───────────────────────────────────────────────────────
 GEMINI_MODEL = "gemini-2.5-flash"

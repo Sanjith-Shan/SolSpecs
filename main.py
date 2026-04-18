@@ -11,7 +11,6 @@ Modes:
 import argparse
 import logging
 import signal
-import sys
 import threading
 import time
 
@@ -24,6 +23,7 @@ logger = logging.getLogger("Main")
 import config
 from core.state_machine import StateMachine
 from core.audio import AudioManager, MockAudioManager, PRIORITY_CRITICAL, PRIORITY_NORMAL
+from core.heat_stress import compute_wbgt_estimate
 
 
 def parse_args():
@@ -37,8 +37,7 @@ def parse_args():
 def build_mcu_bridge(simulate: bool):
     if simulate:
         from core.mcu_bridge import SimulatorBridge
-        bridge = SimulatorBridge(update_hz=20)
-        return bridge
+        return SimulatorBridge(update_hz=20)
     from core.mcu_bridge import SerialBridge
     return SerialBridge(port="/dev/ttyACM0", baud=115200)
 
@@ -65,13 +64,40 @@ def build_audio(simulate: bool):
     return AudioManager()
 
 
-def build_ai_pipeline():
+def build_ai_pipeline(simulate: bool):
     try:
         from core.ai_pipeline import AIPipeline
-        return AIPipeline()
+        return AIPipeline(simulate=simulate)
     except Exception as e:
         logger.warning(f"AI pipeline unavailable: {e}")
         return None
+
+
+def _snapshot_vitals(sm: StateMachine, glasses_data: dict, mcu_data: dict) -> dict:
+    """Build the vitals dict that gets pushed to the LLM system prompt."""
+    temp = glasses_data.get("ambient_temp_c") or 28.0
+    humidity = glasses_data.get("ambient_humidity_pct") or 60.0
+    in_sun = glasses_data.get("is_direct_sun", False)
+    wbgt = compute_wbgt_estimate(temp, humidity, in_sun)
+
+    hr = mcu_data.get("heart_rate", 0)
+    spo2 = mcu_data.get("spo2", 0)
+    skin_raw = mcu_data.get("skin_temp_raw", 620)
+    skin_temp = StateMachine._skin_raw_to_celsius(skin_raw)
+    work_hours = (time.time() - sm._session_start) / 3600.0
+
+    return {
+        "tier": sm.current_tier,
+        "heart_rate": hr,
+        "spo2": spo2,
+        "skin_temp": skin_temp,
+        "ambient_temp": temp,
+        "humidity": humidity,
+        "wbgt": wbgt,
+        "sun_exposure_minutes": sm.sun_exposure_minutes,
+        "noise_hours_today": sm.noise_hours_today,
+        "work_hours": work_hours,
+    }
 
 
 def main():
@@ -87,12 +113,23 @@ def main():
     mcu = build_mcu_bridge(simulate)
     glasses = build_glasses_client(simulate)
     gps = build_gps_client(simulate)
-    ai = build_ai_pipeline()
+    ai = build_ai_pipeline(simulate)
+
+    # Shared latest sensor snapshots for vitals injection
+    _latest_glasses: dict = {}
+    _latest_mcu: dict = {}
+    _snapshots_lock = threading.Lock()
 
     # ── Wire callbacks ────────────────────────────────────────────────
 
     def on_tier_change(tier: str):
         logger.info(f"Heat tier → {tier.upper()}")
+        # Push fresh vitals context to LLM whenever tier changes
+        if ai:
+            with _snapshots_lock:
+                g, m = dict(_latest_glasses), dict(_latest_mcu)
+            vitals = _snapshot_vitals(sm, g, m)
+            ai.update_vitals(vitals)
 
     def on_alert(text: str, priority: int):
         audio.speak(text, priority=priority)
@@ -128,13 +165,32 @@ def main():
 
     # ── Wire sensor feeds ─────────────────────────────────────────────
 
-    mcu.on_sensor_data = sm.feed_mcu
-    glasses.on_sensor_data = sm.feed_glasses
+    def on_mcu_data(data: dict):
+        with _snapshots_lock:
+            _latest_mcu.update(data)
+        sm.feed_mcu(data)
+
+    def on_glasses_data(data: dict):
+        with _snapshots_lock:
+            _latest_glasses.update(data)
+        sm.feed_glasses(data)
+
+    mcu.on_sensor_data = on_mcu_data
+    glasses.on_sensor_data = on_glasses_data
 
     def gps_poll_loop():
         while True:
             sm.feed_gps(gps.location)
             time.sleep(config.PHONE_GPS_POLL_INTERVAL_S)
+
+    # Push vitals to LLM every 60 s so context stays fresh even without tier changes
+    def vitals_refresh_loop():
+        while True:
+            time.sleep(60)
+            if ai:
+                with _snapshots_lock:
+                    g, m = dict(_latest_glasses), dict(_latest_mcu)
+                ai.update_vitals(_snapshot_vitals(sm, g, m))
 
     # ── Start everything ──────────────────────────────────────────────
 
@@ -143,6 +199,7 @@ def main():
     glasses.start()
     gps.start()
     threading.Thread(target=gps_poll_loop, daemon=True).start()
+    threading.Thread(target=vitals_refresh_loop, daemon=True).start()
 
     audio.speak("SolSpecs initialized. Monitoring heat stress.", priority=PRIORITY_NORMAL)
     logger.info("All subsystems running")
@@ -150,7 +207,7 @@ def main():
     # ── Interactive keyboard control ──────────────────────────────────
 
     if args.interactive:
-        _run_interactive(sm, mcu, glasses, audio)
+        _run_interactive(sm, mcu, glasses, audio, ai)
     else:
         _run_until_signal()
 
@@ -176,7 +233,7 @@ def _run_until_signal():
     stop.wait()
 
 
-def _run_interactive(sm, mcu, glasses, audio):
+def _run_interactive(sm, mcu, glasses, audio, ai):
     print("\n=== Interactive Mode ===")
     print("Commands:")
     print("  h  — simulate heat spike (elevated HR + hot day)")
@@ -185,6 +242,7 @@ def _run_interactive(sm, mcu, glasses, audio):
     print("  f  — simulate fall")
     print("  s  — status readout (quick EMG flex)")
     print("  e  — environment scan (sustained EMG flex)")
+    print("  a  — ask the AI a question")
     print("  q  — quit\n")
 
     while True:
@@ -216,6 +274,14 @@ def _run_interactive(sm, mcu, glasses, audio):
         elif cmd == "e":
             print("→ Triggering environment scan")
             mcu.simulate_gesture("converse")
+        elif cmd == "a":
+            if ai:
+                question = input("  Ask: ").strip()
+                if question:
+                    reply = ai.chat(question)
+                    print(f"  AI: {reply}")
+            else:
+                print("  AI pipeline not available.")
         else:
             print("Unknown command. Type q to quit.")
 
