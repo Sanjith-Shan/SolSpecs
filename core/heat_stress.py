@@ -182,33 +182,38 @@ def compute_heat_stress_tier(
 
 def thermistor_raw_to_celsius(
     raw_adc: int,
-    adc_max: int = 4095,
+    adc_max: int = 1023,
     r_divider: float = 10_000.0,
-    r_nominal: float = 10_000.0,
+    r_nominal: float = 2430.0,
     t_nominal: float = 25.0,
     b_coefficient: float = 3950.0,
 ) -> float:
     """
-    Convert raw STM32 ADC reading to skin temperature in °C.
+    Convert Arduino UNO Q 10-bit ADC reading to skin temperature in °C.
 
-    Assumes NTC thermistor in a voltage-divider with:
-        Rth (NTC) in the lower leg (between ADC pin and GND)
-        R_divider in the upper leg (between VCC and ADC pin)
+    Wiring (inverted divider — lower ADC = hotter):
+        3.3 V → 10 kΩ fixed resistor → A1 (ADC) → NTC thermistor → GND
+
+    Voltage divider:
+        V_A1 = 3.3 * R_therm / (R_fixed + R_therm)
+        R_therm = R_fixed * raw / (adc_max - raw)
+
+    Lower raw values → lower V_A1 → lower R_therm → higher temperature (NTC).
 
     Args:
-        raw_adc:       12-bit ADC reading from STM32 pin A1.
-        adc_max:       ADC full-scale (4095 for 12-bit).
-        r_divider:     Fixed divider resistor value in Ω (default 10 kΩ).
+        raw_adc:       10-bit ADC reading (0–1023) from Arduino pin A1.
+        adc_max:       ADC full-scale (1023 for 10-bit Arduino).
+        r_divider:     Fixed resistor in Ω (upper leg, between VCC and ADC).
         r_nominal:     Thermistor nominal resistance at t_nominal °C (Ω).
         t_nominal:     Thermistor nominal temperature in °C (default 25 °C).
-        b_coefficient: Thermistor B value (K).  Calibrate at your hardware.
+        b_coefficient: Steinhart-Hart B coefficient (K).
 
     Returns:
-        Temperature in °C.
+        Temperature in °C, or nan if raw_adc is out of range.
     """
-    if raw_adc <= 0:
+    if raw_adc <= 0 or raw_adc >= adc_max:
         return float("nan")
-    # Voltage divider — thermistor in lower leg
+    # Inverted divider: thermistor in lower leg (between ADC pin and GND)
     r_thermistor = r_divider * raw_adc / (adc_max - raw_adc)
     t0_k = t_nominal + 273.15
     temp_k = 1.0 / (

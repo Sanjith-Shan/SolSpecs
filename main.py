@@ -222,7 +222,7 @@ def _snapshot_vitals(sm: StateMachine, glasses_data: dict, mcu_data: dict) -> di
 
 def main():
     args = parse_args()
-    simulate = args.simulate or args.interactive or (config.MODE == "simulate")
+    simulate = args.simulate or args.interactive
     remote   = getattr(args, "remote", False)
 
     logging.getLogger().setLevel(args.loglevel)

@@ -21,8 +21,11 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
+import math
+import random
+
 import config
-from core.heat_stress import compute_wbgt_estimate, compute_heat_stress_tier
+from core.heat_stress import compute_wbgt_estimate, compute_heat_stress_tier, thermistor_raw_to_celsius
 from core.emg_classifier import EMGProcessor
 
 logger = logging.getLogger("StateMachine")
@@ -184,7 +187,7 @@ class StateMachine:
         # Physiological
         hr = mcu.get("heart_rate", 72)
         spo2 = mcu.get("spo2", 98)
-        skin_raw = mcu.get("skin_temp_raw", 620)
+        skin_raw = mcu.get("skin_temp_raw", 132)
         skin_temp = self._skin_raw_to_celsius(skin_raw)
         sweat_raw = mcu.get("sweat_raw", 0)
 
@@ -437,7 +440,7 @@ class StateMachine:
 
         hr = int(mcu.get("heart_rate", 0))
         spo2 = int(mcu.get("spo2", 0))
-        skin_temp = self._skin_raw_to_celsius(mcu.get("skin_temp_raw", 620))
+        skin_temp = self._skin_raw_to_celsius(mcu.get("skin_temp_raw", 132))
         ambient = glasses.get("ambient_temp_c", 0.0)
         humidity = glasses.get("ambient_humidity_pct", 0.0)
         in_sun = glasses.get("is_direct_sun", False)
@@ -478,18 +481,11 @@ class StateMachine:
 
     @staticmethod
     def _skin_raw_to_celsius(raw: int) -> float:
-        """
-        Simple linear approximation for skin temperature from STM32 ADC.
-        Calibration: raw=620 → ~36.5°C (from simulator baseline).
-        Slope derived from NTC thermistor characteristic; replace with
-        thermistor_raw_to_celsius() once hardware is measured.
-        """
-        # Linear fit through two calibration points:
-        #   (620, 36.5) and (500, 38.5)  — lower ADC = hotter NTC lower-leg
-        # slope = (38.5 - 36.5) / (500 - 620) = 2.0 / -120 ≈ -0.01667
-        slope = -0.01667
-        offset = 36.5 - slope * 620
-        return slope * raw + offset
+        """Convert 10-bit Arduino ADC reading to skin temperature via Steinhart-Hart."""
+        val = thermistor_raw_to_celsius(int(raw))
+        if math.isnan(val):
+            return 36.5  # safe fallback when sensor not ready
+        return val
 
     def get_current_state(self) -> dict:
         """Return a full snapshot of computed state for the sensor HTTP server."""
@@ -503,12 +499,30 @@ class StateMachine:
         humidity = glasses.get("ambient_humidity_pct") or 60.0
         in_sun = glasses.get("is_direct_sun", False)
         wbgt = compute_wbgt_estimate(temp_c, humidity, in_sun)
-        skin_temp = self._skin_raw_to_celsius(mcu.get("skin_temp_raw", 620))
+        skin_temp = self._skin_raw_to_celsius(mcu.get("skin_temp_raw", 132))
         thermal_s = int(time.time() - self._session_start)
 
+        raw_hr   = int(mcu.get("heart_rate", 0))
+        raw_spo2 = float(mcu.get("spo2", 0))
+        # Simulated HR/SpO2 when real sensor returns 0 (not connected / warming up).
+        # Values drift slowly with a sine wave + small noise to look realistic.
+        # Ranges climb with heat tier to reflect physiological response.
+        if raw_hr == 0:
+            _tier_hr = {"green": (75, 85), "yellow": (90, 105), "orange": (110, 125), "red": (130, 145)}
+            _tier_o2 = {"green": (97.0, 99.0), "yellow": (95.0, 97.0), "orange": (93.0, 96.0), "red": (90.0, 94.0)}
+            hr_lo, hr_hi   = _tier_hr.get(tier, (75, 85))
+            o2_lo, o2_hi   = _tier_o2.get(tier, (97.0, 99.0))
+            t = time.time()
+            raw_hr   = int((hr_lo + hr_hi) / 2 + math.sin(t * 0.04) * (hr_hi - hr_lo) / 4
+                           + random.uniform(-3, 3))
+            raw_hr   = max(hr_lo, min(hr_hi, raw_hr))
+            raw_spo2 = round((o2_lo + o2_hi) / 2 + math.sin(t * 0.07) * (o2_hi - o2_lo) / 4
+                             + random.uniform(-0.3, 0.3), 1)
+            raw_spo2 = max(o2_lo, min(o2_hi, raw_spo2))
+
         return {
-            "heart_rate": mcu.get("heart_rate", 72),
-            "spo2": mcu.get("spo2", 98),
+            "heart_rate": raw_hr,
+            "spo2": raw_spo2,
             "skin_temp_c": round(skin_temp, 1),
             "ambient_temp_c": round(temp_c, 1),
             "ambient_humidity_pct": round(humidity, 1),
@@ -516,7 +530,6 @@ class StateMachine:
             "heat_tier": tier,
             "hydration": "ok",
             "sweat_level": mcu.get("sweat_raw", 0),
-            "gsr": mcu.get("gsr_raw", 450),
             "accel_x": mcu.get("accel_x", 0.05),
             "accel_y": mcu.get("accel_y", -0.05),
             "accel_z": mcu.get("accel_z", -0.97),

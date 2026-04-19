@@ -449,9 +449,9 @@ class TestComputeHeatStressTierRealScenarios:
 class TestThermistorRawToCelsius:
 
     def test_nominal_resistance_gives_nominal_temp(self):
-        """When ADC value corresponds to Rth = R_nominal → temperature = T_nominal."""
-        # V_divider mid = VCC/2 → Rth = Rdiv → ADC = adc_max/2
-        result = thermistor_raw_to_celsius(raw_adc=4095 // 2)
+        """When ADC value corresponds to Rth = R_nominal (2430Ω) → temperature = T_nominal (25°C)."""
+        # R_nominal=2430Ω: raw = 2430*1023/(10000+2430) ≈ 200
+        result = thermistor_raw_to_celsius(raw_adc=200)
         assert abs(result - 25.0) < 1.0
 
     def test_zero_adc_returns_nan(self):
@@ -460,27 +460,24 @@ class TestThermistorRawToCelsius:
         assert math.isnan(result)
 
     def test_higher_adc_higher_resistance_lower_temp(self):
-        """In lower-leg NTC configuration, higher ADC → lower Rth → higher temp
-        Wait — lower-leg: Rth = Rdiv * adc / (adc_max - adc)
-        Higher ADC → higher Rth → lower temp (NTC inverts with resistance).
-        Actually higher Rth → lower temp for NTC."""
-        temp_low_adc = thermistor_raw_to_celsius(raw_adc=500)
-        temp_high_adc = thermistor_raw_to_celsius(raw_adc=3500)
-        # Higher ADC → higher Rth → lower temperature
+        """Inverted divider (3.3V→Rfixed→ADC→NTC→GND):
+        Higher ADC → higher Rth → lower temp (NTC: high R = cold)."""
+        temp_low_adc  = thermistor_raw_to_celsius(raw_adc=350)   # hot (~40°C)
+        temp_high_adc = thermistor_raw_to_celsius(raw_adc=700)   # cold (~10°C)
         assert temp_high_adc < temp_low_adc
 
     def test_body_temperature_range(self):
-        """ADC values ~1800–2200 should map to body-temperature range (30–42°C).
+        """10-bit ADC values ~110–165 should map to skin-temperature range (30–42°C).
 
-        For a 10kΩ NTC (B=3950) in a 10kΩ lower-leg divider:
-          ADC=2048 → Rth ≈ 10kΩ → 25°C nominal
-          ADC~1800 → Rth ≈ 7.8kΩ → ~31°C
-        Scanning this range verifies physiologically plausible output.
+        With R_nominal=2430Ω, B=3950 in a 10kΩ inverted divider (10-bit ADC):
+          ADC=200 → Rth ≈ 2430Ω → 25°C nominal
+          ADC=132 → Rth ≈ 1290Ω → ~36.5°C (skin temp)
+          ADC=110 → Rth ≈ 1190Ω → ~42°C
         """
-        results = [thermistor_raw_to_celsius(raw_adc=adc) for adc in range(1600, 2200, 50)]
+        results = [thermistor_raw_to_celsius(raw_adc=adc) for adc in range(110, 170, 5)]
         finite = [r for r in results if math.isfinite(r)]
         assert len(finite) > 0
-        body_range = [r for r in finite if 25 <= r <= 45]
+        body_range = [r for r in finite if 30 <= r <= 45]
         assert len(body_range) > 0
 
     def test_custom_b_coefficient(self):
@@ -490,7 +487,7 @@ class TestThermistorRawToCelsius:
         assert temp_b3950 != temp_b3435
 
     def test_output_is_finite_for_typical_adc_range(self):
-        """For ADC values 1–4094, result must be a finite float."""
-        for adc in [1, 100, 500, 1000, 2000, 3000, 4000, 4094]:
+        """For 10-bit ADC values 1–1022, result must be a finite float."""
+        for adc in [1, 100, 200, 388, 511, 700, 900, 1022]:
             result = thermistor_raw_to_celsius(raw_adc=adc)
             assert math.isfinite(result), f"Non-finite result for ADC={adc}"

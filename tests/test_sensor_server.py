@@ -45,8 +45,8 @@ def client_no_sm():
 
 
 _NORMAL_MCU = {
-    "heart_rate": 72, "spo2": 98, "skin_temp_raw": 620,
-    "sweat_raw": 0, "gsr_raw": 450,
+    "heart_rate": 72, "spo2": 98, "skin_temp_raw": 388,
+    "sweat_raw": 0,
     "accel_x": 0.0, "accel_y": 0.0, "accel_z": 1.0,
     "emg_raw": 512,
 }
@@ -77,7 +77,7 @@ class TestSensorsRoute:
         for key in (
             "heart_rate", "spo2", "skin_temp_c", "ambient_temp_c",
             "ambient_humidity_pct", "wbgt", "heat_tier", "hydration",
-            "sweat_level", "gsr", "accel_x", "accel_y", "accel_z",
+            "sweat_level", "accel_x", "accel_y", "accel_z",
             "fall_detected", "sun_exposure_min", "noise_exposure_min",
             "thermal_exposure_s", "timestamp",
         ):
@@ -232,10 +232,10 @@ class TestAnalyzeFuelRoute:
         r = client.options("/analyze-fuel")
         assert r.status_code == 204
 
-    def test_empty_body_returns_empty_list(self, client):
+    def test_empty_body_returns_no_image_error(self, client):
         r = client.post("/analyze-fuel", data=b"")
         assert r.status_code == 200
-        assert json.loads(r.data) == []
+        assert json.loads(r.data).get("error") == "no_image"
 
     def test_no_api_key_returns_no_key_error(self, client):
         original = config.GEMINI_API_KEY
@@ -273,7 +273,7 @@ class TestGetCurrentState:
         required = [
             "heart_rate", "spo2", "skin_temp_c", "ambient_temp_c",
             "ambient_humidity_pct", "wbgt", "heat_tier", "hydration",
-            "sweat_level", "gsr", "accel_x", "accel_y", "accel_z",
+            "sweat_level", "accel_x", "accel_y", "accel_z",
             "fall_detected", "sun_exposure_min", "noise_exposure_min",
             "thermal_exposure_s", "timestamp",
         ]
@@ -330,9 +330,9 @@ class TestGetCurrentState:
         sm = StateMachine()
         s1 = sm.get_current_state()
         s2 = sm.get_current_state()
-        # Heat tier and most values should be identical between two rapid calls
+        # Heat tier must be identical; HR may differ slightly (simulated noise)
         assert s1["heat_tier"] == s2["heat_tier"]
-        assert s1["heart_rate"] == s2["heart_rate"]
+        assert abs(s1["heart_rate"] - s2["heart_rate"]) <= 10
 
     def test_tier_escalates_after_critical_feed(self):
         sm = StateMachine()

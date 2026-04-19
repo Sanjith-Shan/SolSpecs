@@ -66,17 +66,13 @@ class TestHTTPBridgeDispatch:
         frames = _dispatch({"skin_temp_raw": 630})
         assert frames[0]["skin_temp_raw"] == 630
 
-    def test_skin_temp_raw_defaults_to_620(self):
+    def test_skin_temp_raw_defaults_to_132(self):
         frames = _dispatch({})
-        assert frames[0]["skin_temp_raw"] == 620
+        assert frames[0]["skin_temp_raw"] == 132
 
     def test_sweat_raw_forwarded(self):
         frames = _dispatch({"sweat_raw": 200})
         assert frames[0]["sweat_raw"] == 200
-
-    def test_gsr_raw_default(self):
-        frames = _dispatch({})
-        assert frames[0]["gsr_raw"] == 450
 
     def test_emg_raw_default(self):
         frames = _dispatch({})
@@ -105,9 +101,13 @@ class TestHTTPBridgeDispatch:
     def test_mcu_frame_has_all_required_keys(self):
         frames = _dispatch({})
         required = ("emg_raw", "heart_rate", "spo2", "accel_x", "accel_y",
-                    "accel_z", "skin_temp_raw", "sweat_raw", "gsr_raw")
+                    "accel_z", "skin_temp_raw", "sweat_raw")
         for k in required:
             assert k in frames[0], f"Missing key: {k}"
+
+    def test_gsr_raw_not_in_frame(self):
+        frames = _dispatch({})
+        assert "gsr_raw" not in frames[0]
 
 
 # ── Glasses ambient data path ─────────────────────────────────────────────────

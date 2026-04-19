@@ -169,7 +169,7 @@ class SimulatorBridge(MCUBridge):
             "gyro_x": random.uniform(-5, 5),
             "gyro_y": random.uniform(-5, 5),
             "gyro_z": random.uniform(-5, 5),
-            "skin_temp_raw": 620 + random.randint(-5, 5),  # ~36.5°C
+            "skin_temp_raw": 132 + random.randint(-5, 5),  # ~36.5°C
             "ambient_light": 650 + random.randint(-20, 20),
             "ambient_noise": 200 + random.randint(-30, 30),
         }
@@ -291,11 +291,11 @@ class HTTPBridge(MCUBridge):
         from core.heat_stress import thermistor_raw_to_celsius
 
         # Convert skin_temp_raw → Celsius; fall back to raw if conversion fails
-        skin_raw = int(raw.get("skin_temp_raw", 620))
+        skin_raw = int(raw.get("skin_temp_raw", 132))
         try:
-            skin_temp_raw_val = skin_raw if skin_raw > 0 else 620
+            skin_temp_raw_val = skin_raw if skin_raw > 0 else 132
         except (TypeError, ValueError):
-            skin_temp_raw_val = 620
+            skin_temp_raw_val = 132
 
         mcu_frame = {
             "emg_raw":       int(raw.get("emg_raw",  512)),
@@ -306,7 +306,6 @@ class HTTPBridge(MCUBridge):
             "accel_z":       float(raw.get("accel_z", -1.0)),
             "skin_temp_raw": skin_temp_raw_val,
             "sweat_raw":     int(raw.get("sweat_raw",  0)),
-            "gsr_raw":       int(raw.get("gsr_raw",  450)),
         }
         if self.on_sensor_data:
             self.on_sensor_data(mcu_frame)

@@ -37,7 +37,7 @@ NORMAL_MCU = {
     "emg_raw": 512,
     "heart_rate": 72,
     "spo2": 98,
-    "skin_temp_raw": 620,
+    "skin_temp_raw": 132,
     "sweat_raw": 100,
     "accel_x": 0.0,
     "accel_y": 0.0,
@@ -61,7 +61,7 @@ CRITICAL_MCU = {
     **NORMAL_MCU,
     "heart_rate": 148,
     "spo2": 87,
-    "skin_temp_raw": 480,  # ~39°C with linear approx
+    "skin_temp_raw": 120,  # ~39°C (raw=120 with r_nominal=2430, B=3950)
 }
 
 
@@ -261,18 +261,20 @@ class TestNoiseExposure:
 class TestSkinTempConversion:
 
     def test_baseline_raw_maps_to_normal_temp(self):
-        temp = StateMachine._skin_raw_to_celsius(620)
-        assert abs(temp - 36.5) < 0.1
+        # raw=132 → ~36.5°C (Steinhart-Hart, r_nominal=2430Ω, 10-bit ADC, B=3950)
+        temp = StateMachine._skin_raw_to_celsius(132)
+        assert abs(temp - 36.5) < 0.5
 
     def test_lower_raw_maps_to_higher_temp(self):
-        # Lower ADC → lower Rth → hotter (NTC lower leg)
-        temp_hot = StateMachine._skin_raw_to_celsius(500)
-        temp_norm = StateMachine._skin_raw_to_celsius(620)
+        # Lower ADC → lower Rth → hotter (NTC inverted divider)
+        temp_hot  = StateMachine._skin_raw_to_celsius(100)
+        temp_norm = StateMachine._skin_raw_to_celsius(132)
         assert temp_hot > temp_norm
 
     def test_second_calibration_point(self):
-        temp = StateMachine._skin_raw_to_celsius(500)
-        assert abs(temp - 38.5) < 0.1
+        # raw=200 → nominal 25°C (Rth = R_nominal = 2430Ω)
+        temp = StateMachine._skin_raw_to_celsius(200)
+        assert abs(temp - 25.0) < 0.5
 
 
 # ─── Feed methods ─────────────────────────────────────────────────────────────

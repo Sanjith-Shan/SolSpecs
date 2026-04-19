@@ -117,7 +117,7 @@ def sensors():
             "heart_rate": 72, "spo2": 98, "skin_temp_c": 36.5,
             "ambient_temp_c": 28.0, "ambient_humidity_pct": 60.0,
             "wbgt": 25.0, "heat_tier": "green", "hydration": "ok",
-            "sweat_level": 0, "gsr": 450,
+            "sweat_level": 0,
             "accel_x": 0.0, "accel_y": 0.0, "accel_z": -1.0,
             "fall_detected": False, "sun_exposure_min": 0,
             "noise_exposure_min": 0, "thermal_exposure_s": 0,
