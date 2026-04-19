@@ -33,6 +33,8 @@ def parse_args():
     p.add_argument("--interactive", action="store_true", help="Keyboard scenario control")
     p.add_argument("--https",       action="store_true",
                    help="Serve HUD over HTTPS on port 8443 (needed for Quest 3 WebXR)")
+    p.add_argument("--emg",         action="store_true",
+                   help="Enable Mindrove EMG gesture bridge (real hardware) or mock in simulate mode")
     p.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING"])
     return p.parse_args()
 
@@ -76,6 +78,14 @@ def build_ai_pipeline(simulate: bool):
     except Exception as e:
         logger.warning(f"AI pipeline unavailable: {e}")
         return None
+
+
+def build_emg_bridge(simulate: bool):
+    if simulate:
+        from core.emg_bridge import MockEMGBridge
+        return MockEMGBridge()
+    from core.emg_bridge import EMGBridge
+    return EMGBridge()
 
 
 # ── HTTPS support ─────────────────────────────────────────────────────────────
@@ -213,6 +223,7 @@ def main():
     glasses = build_glasses_client(simulate)
     gps     = build_gps_client(simulate)
     ai      = build_ai_pipeline(simulate)
+    emg     = build_emg_bridge(simulate) if args.emg else None
 
     _latest_glasses: dict = {}
     _latest_mcu: dict = {}
@@ -296,6 +307,36 @@ def main():
     threading.Thread(target=gps_poll_loop,       daemon=True).start()
     threading.Thread(target=vitals_refresh_loop, daemon=True).start()
 
+    if emg:
+        from core.sensor_server import record_gesture_event, record_mayday
+
+        def _on_clench():
+            logger.info("EMG: Clench → fuel scan")
+            record_gesture_event("clench")
+            # Also trigger the AI scan callback
+            if sm.on_ai_scan:
+                sm.on_ai_scan()
+
+        def _on_half_clench():
+            logger.info("EMG: Half-Clench → MAYDAY")
+            record_gesture_event("half_clench")
+            gps_loc = sm._gps_location
+            state = sm.get_current_state()
+            record_mayday({
+                "heart_rate": state.get("heart_rate"),
+                "spo2": state.get("spo2"),
+                "skin_temp_c": state.get("skin_temp_c"),
+                "heat_tier": state.get("heat_tier"),
+                "gps_lat": gps_loc.lat if gps_loc else None,
+                "gps_lng": gps_loc.lng if gps_loc else None,
+                "timestamp": int(time.time()),
+            })
+
+        emg.on_clench = _on_clench
+        emg.on_half_clench = _on_half_clench
+        emg.start()
+        logger.info("EMG bridge started")
+
     # ── Start sensor/HUD server ───────────────────────────────────────
 
     _start_sensor_server(sm, ai, use_https=args.https)
@@ -317,6 +358,8 @@ def main():
     glasses.stop()
     gps.stop()
     audio.stop()
+    if emg:
+        emg.stop()
     logger.info("Goodbye.")
 
 

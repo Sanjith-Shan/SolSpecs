@@ -248,8 +248,9 @@ class FireGrid{
 'use strict';
 
 /* ── CONFIG ─────────────────────────────────────────── */
-const SENSOR_SERVER   = 'http://localhost:8080';
-const PANORAMA_URL    = 'panorama.jpg';
+const SENSOR_SERVER      = 'http://localhost:8080';
+const PANORAMA_URL       = 'panorama.jpg';
+const SATELLITE_MAP_URL  = 'hud/textures/satellite.jpg';
 const SENSOR_POLL_MS  = 2000;
 const FIRE_TICK_MS         = 1000;   // 1 tick per real second = 1 simulated minute
 const FIRE_REALTIME_RATIO  = 1000;   // ms per simulated minute
@@ -463,18 +464,52 @@ function checkProximity(cells) {
 
 /* ── FIRE CANVAS RENDER (DOM + source for VR texture) ── */
 const fcanvas=$('fire-canvas'), fctx=fcanvas.getContext('2d');
+const _satImg=new Image(); let _satLoaded=false;
+_satImg.onload=()=>{_satLoaded=true; renderFire(grid.getState());};
+_satImg.onerror=()=>{_satLoaded=false;};
+_satImg.src=SATELLITE_MAP_URL;
 const FUEL_RGB=[[26,68,136],[200,180,86],[74,110,42],[29,77,26],[119,119,119],[153,153,153]];
 
-function renderFire(cells) {
-    const W=GRID_SIZE*CELL_PX, img=fctx.createImageData(W,W), d=img.data;
-    for(let cy=0;cy<GRID_SIZE;cy++) for(let cx=0;cx<GRID_SIZE;cx++){
-        const cell=cells[cy][cx]; let r,g,b;
-        if(cell.state===1){r=255;g=80;b=0;}
-        else if(cell.state===2){r=42;g=14;b=6;}
-        else{const base=FUEL_RGB[cell.fuel_type]??FUEL_RGB[5];const ef=Math.max(0.55,Math.min(1.10,0.60+0.50*(cell.elevation/85)));r=Math.min(255,Math.round(base[0]*ef));g=Math.min(255,Math.round(base[1]*ef));b=Math.min(255,Math.round(base[2]*ef));}
-        for(let py=0;py<CELL_PX;py++){const rb=((cy*CELL_PX+py)*W+cx*CELL_PX)*4;for(let px=0;px<CELL_PX;px++){const i=rb+px*4;d[i]=r;d[i+1]=g;d[i+2]=b;d[i+3]=255;}}
+function renderFire(cells, isPrediction=false) {
+    const W=GRID_SIZE*CELL_PX;
+
+    if(_satLoaded) {
+        // Satellite base layer
+        fctx.drawImage(_satImg, 0, 0, W, W);
+
+        // Transparent fire overlay
+        const img=fctx.createImageData(W,W), d=img.data;
+        for(let cy=0;cy<GRID_SIZE;cy++) for(let cx=0;cx<GRID_SIZE;cx++){
+            const cell=cells[cy][cx]; let r=0,g=0,b=0,a=0;
+            if(cell.state===1){
+                if(isPrediction){r=255;g=50;b=0;a=77;}   // faint transparent red
+                else{r=255;g=100;b=0;a=153;}              // semi-transparent orange
+            } else if(cell.state===2){r=40;g=40;b=40;a=128;}  // semi-transparent dark
+            // else unburned: a=0, satellite shows through
+            for(let py=0;py<CELL_PX;py++){const rb=((cy*CELL_PX+py)*W+cx*CELL_PX)*4;for(let px=0;px<CELL_PX;px++){const i=rb+px*4;d[i]=r;d[i+1]=g;d[i+2]=b;d[i+3]=a;}}
+        }
+        fctx.putImageData(img,0,0);
+
+        // Grid lines every 8 cells
+        fctx.save(); fctx.strokeStyle='rgba(255,255,255,0.10)'; fctx.lineWidth=0.5;
+        for(let i=8;i<GRID_SIZE;i+=8){
+            const px=i*CELL_PX;
+            fctx.beginPath(); fctx.moveTo(px,0); fctx.lineTo(px,W); fctx.stroke();
+            fctx.beginPath(); fctx.moveTo(0,px); fctx.lineTo(W,px); fctx.stroke();
+        }
+        fctx.restore();
+    } else {
+        // Fallback: solid-color grid rendering
+        const img=fctx.createImageData(W,W), d=img.data;
+        for(let cy=0;cy<GRID_SIZE;cy++) for(let cx=0;cx<GRID_SIZE;cx++){
+            const cell=cells[cy][cx]; let r,g,b;
+            if(cell.state===1){r=255;g=80;b=0;}
+            else if(cell.state===2){r=42;g=14;b=6;}
+            else{const base=FUEL_RGB[cell.fuel_type]??FUEL_RGB[5];const ef=Math.max(0.55,Math.min(1.10,0.60+0.50*(cell.elevation/85)));r=Math.min(255,Math.round(base[0]*ef));g=Math.min(255,Math.round(base[1]*ef));b=Math.min(255,Math.round(base[2]*ef));}
+            for(let py=0;py<CELL_PX;py++){const rb=((cy*CELL_PX+py)*W+cx*CELL_PX)*4;for(let px=0;px<CELL_PX;px++){const i=rb+px*4;d[i]=r;d[i+1]=g;d[i+2]=b;d[i+3]=255;}}
+        }
+        fctx.putImageData(img,0,0);
     }
-    fctx.putImageData(img,0,0);
 
     // Evacuation route overlay
     if(evacRoute&&evacRoute.length>=2){
@@ -541,7 +576,7 @@ scrubber.addEventListener('input',()=>{
     if(mins===0){scrubActive=false;scrubLabel.textContent='▶ LIVE';renderFire(grid.getState());return;}
     scrubActive=true; scrubLabel.textContent=`⏩ PREDICTION +${mins} MIN`;
     clearTimeout(scrubTimer);
-    scrubTimer=setTimeout(()=>renderFire(grid.predictFuture(mins,DEMO_WIND_DIR,DEMO_WIND_SPEED)),50);
+    scrubTimer=setTimeout(()=>renderFire(grid.predictFuture(mins,DEMO_WIND_DIR,DEMO_WIND_SPEED),true),50);
 });
 function _snapScrubber(){if(!scrubActive)return;scrubber.value=0;scrubActive=false;scrubLabel.textContent='▶ LIVE';renderFire(grid.getState());}
 scrubber.addEventListener('mouseup',_snapScrubber);
@@ -567,6 +602,19 @@ async function pollSensors() {
         updateVitals(await res.json());
         setNoSignal(false);
     } catch(_){ setNoSignal(true); }
+}
+
+/* ── EMG GESTURE POLL ────────────────────────────────── */
+async function pollEMGEvents() {
+    try {
+        const res=await fetch(`${SENSOR_SERVER}/emg-events`,{signal:AbortSignal.timeout(2000)});
+        if(!res.ok) return;
+        const data=await res.json();
+        (data.events||[]).forEach(ev=>{
+            if(ev.gesture==='clench')   scanFuel();
+            else if(ev.gesture==='half_clench') triggerMayday();
+        });
+    } catch(_){}
 }
 
 /* ── FIRE TICK ───────────────────────────────────────── */
@@ -1240,6 +1288,7 @@ updateTimers();
 checkProximity(grid.getState());
 pollSensors();
 setInterval(pollSensors,     SENSOR_POLL_MS);
+setInterval(pollEMGEvents,   500);
 setInterval(fireTick,        FIRE_TICK_MS);
 setInterval(updateTimers,    1000);
 setInterval(updateEvacRoute, 5000);

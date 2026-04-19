@@ -25,6 +25,14 @@ _ai = None          # AIPipeline instance (optional)
 _sm_lock = threading.Lock()
 _ai_lock = threading.Lock()
 
+# ── Gesture / MAYDAY state ────────────────────────────────────────────────────
+_emg_events = []            # pending gesture events not yet polled by HUD
+_emg_lock = threading.Lock()
+_latest_gesture = None      # most recent confirmed gesture label
+_gesture_timestamp = None   # epoch float of latest gesture
+_mayday_active = False
+_mayday_data = None
+
 
 def set_state_machine(sm):
     global _sm
@@ -36,6 +44,24 @@ def set_ai_pipeline(ai_pipeline):
     global _ai
     with _ai_lock:
         _ai = ai_pipeline
+
+
+def record_gesture_event(gesture: str):
+    """Called by EMGBridge callbacks or POST /emg-event to register a gesture."""
+    global _latest_gesture, _gesture_timestamp
+    ts = time.time()
+    with _emg_lock:
+        _latest_gesture = gesture
+        _gesture_timestamp = ts
+        _emg_events.append({"gesture": gesture, "timestamp": ts})
+
+
+def record_mayday(data: dict):
+    """Called when MAYDAY is triggered via EMG half-clench."""
+    global _mayday_active, _mayday_data
+    with _emg_lock:
+        _mayday_active = True
+        _mayday_data = data
 
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
@@ -58,9 +84,14 @@ def add_cors(response):
 def sensors():
     with _sm_lock:
         sm = _sm
+    with _emg_lock:
+        lg = _latest_gesture
+        gt = _gesture_timestamp
+        ma = _mayday_active
+        md = dict(_mayday_data) if _mayday_data else None
+
     if sm is None:
-        # Fallback defaults when state machine not yet attached
-        return jsonify({
+        state = {
             "heart_rate": 72, "spo2": 98, "skin_temp_c": 36.5,
             "ambient_temp_c": 28.0, "ambient_humidity_pct": 60.0,
             "wbgt": 25.0, "heat_tier": "green", "hydration": "ok",
@@ -69,8 +100,15 @@ def sensors():
             "fall_detected": False, "sun_exposure_min": 0,
             "noise_exposure_min": 0, "thermal_exposure_s": 0,
             "timestamp": int(time.time()),
-        })
-    return jsonify(sm.get_current_state())
+        }
+    else:
+        state = sm.get_current_state()
+
+    state["latest_gesture"] = lg
+    state["gesture_timestamp"] = gt
+    state["mayday_active"] = ma
+    state["mayday_data"] = md
+    return jsonify(state)
 
 
 @app.route("/status")
@@ -98,6 +136,41 @@ def fire_config():
         "grid_size": config.FIRE_GRID_SIZE,
         "tick_rate": config.FIRE_TICK_RATE,
     })
+
+
+# ── EMG gesture events ───────────────────────────────────────────────────────
+
+@app.route("/emg-event", methods=["POST", "OPTIONS"])
+def emg_event_post():
+    if request.method == "OPTIONS":
+        return "", 204
+    body = request.get_json(silent=True) or {}
+    gesture = body.get("gesture", "").lower()
+    if gesture in ("clench", "half_clench"):
+        record_gesture_event(gesture)
+        if gesture == "half_clench":
+            with _sm_lock:
+                sm = _sm
+            gps = sm._gps_location if sm else None
+            record_mayday({
+                "heart_rate": sm.get_current_state().get("heart_rate") if sm else None,
+                "spo2": sm.get_current_state().get("spo2") if sm else None,
+                "skin_temp_c": sm.get_current_state().get("skin_temp_c") if sm else None,
+                "heat_tier": sm.get_current_state().get("heat_tier") if sm else None,
+                "gps_lat": gps.lat if gps else None,
+                "gps_lng": gps.lng if gps else None,
+                "timestamp": int(time.time()),
+            })
+    return jsonify({"status": "ok"})
+
+
+@app.route("/emg-events")
+def emg_events_get():
+    global _emg_events
+    with _emg_lock:
+        pending = list(_emg_events)
+        _emg_events.clear()
+    return jsonify({"events": pending})
 
 
 # ── Fuel analysis ─────────────────────────────────────────────────────────────
