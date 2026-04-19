@@ -80,6 +80,20 @@
     .alert-warning  { border-color:rgba(255,200,0,0.80)!important; box-shadow:0 0 28px rgba(255,200,0,0.24)!important; }
     .alert-info     { border-color:rgba(0,180,255,0.70)!important; box-shadow:0 0 22px rgba(0,180,255,0.18)!important; }
 
+    /* SCAN button */
+    #scan-btn { position:fixed; bottom:22px; left:22px; background:rgba(0,0,0,0.85); border:1px solid rgba(255,160,0,0.65); border-radius:8px; padding:10px 22px; color:#ffa000; font-family:inherit; font-size:11px; letter-spacing:3px; cursor:pointer; transition:all 0.2s; box-shadow:0 0 14px rgba(255,140,0,0.15); }
+    #scan-btn:hover,#scan-btn:active { background:rgba(30,15,0,0.95); border-color:rgba(255,160,0,0.95); box-shadow:0 0 26px rgba(255,140,0,0.40); }
+    #scan-btn.scanning { color:#ffdd44; border-color:rgba(255,220,0,0.70); animation:scan-pulse 0.8s ease-in-out infinite; }
+    @keyframes scan-pulse { 0%,100%{box-shadow:0 0 12px rgba(255,200,0,0.30);}50%{box-shadow:0 0 28px rgba(255,200,0,0.70);} }
+
+    /* Fuel priority panel */
+    #fuel-panel { bottom:74px; left:22px; width:348px; display:none; max-height:230px; overflow-y:auto; }
+    .fuel-item { display:grid; grid-template-columns:14px 16px 1fr; align-items:start; column-gap:6px; margin-bottom:6px; font-size:10px; line-height:1.35; }
+    .fuel-num  { color:rgba(0,210,155,0.55); padding-top:1px; }
+    .fuel-name { color:#d8d8d8; text-transform:uppercase; letter-spacing:1px; font-size:10px; }
+    .fuel-detail { color:#4a5e55; font-size:9px; grid-column:3; margin-top:1px; line-height:1.3; }
+    #scan-status { font-size:9px; letter-spacing:2px; color:rgba(0,210,155,0.55); margin-top:5px; }
+
     /* MAYDAY */
     #mayday-btn { position:fixed; bottom:22px; right:22px; width:78px; height:78px; border-radius:50%; background:rgba(160,0,0,0.88); border:3px solid #ff2222; color:#fff; font-family:inherit; font-size:11px; letter-spacing:2px; font-weight:bold; line-height:1.2; cursor:pointer; animation:mayday-idle 3s ease-in-out infinite; transition:background 0.12s, box-shadow 0.12s; }
     #mayday-btn:hover, #mayday-btn:active { background:rgba(255,0,0,0.96); box-shadow:0 0 44px rgba(255,0,0,0.70); }
@@ -135,6 +149,15 @@
   <div id="alert-banner"><div id="alert-level"></div><div id="alert-text"></div></div>
 
   <button id="mayday-btn" onclick="triggerMayday()">MAYDAY</button>
+
+  <!-- ── Fuel Priority Panel ───────────────────────────── -->
+  <div id="fuel-panel" class="panel">
+    <div class="panel-title">◈ FIRELINE PRIORITY <span id="scan-status"></span></div>
+    <div id="fuel-list"></div>
+  </div>
+
+  <!-- ── Scan Fuel Button ──────────────────────────────── -->
+  <button id="scan-btn" onclick="scanFuel()">⬡ SCAN FUEL</button>
 </div>
 
 
@@ -692,9 +715,207 @@ function drawAlertVR() {
 function threeAnimate() {
     tickParticles();
     if(vrHudGroup){ drawVitalsVR(); drawTimersVR(); drawAlertVR(); vrFireTex.needsUpdate=true; }
+    // Pulse fuel markers
+    const _pt=Date.now()/1000;
+    fuelMarkers.forEach(g=>g.children.forEach(s=>{
+        if(s.userData.pulse) s.material.opacity=0.45+0.55*Math.abs(Math.sin(_pt*2.5+g.position.x+g.position.z));
+    }));
     renderer3.render(scene3,camera3);
 }
 
+
+/* ═══════════════════════════════════════════════════════
+   FUEL CLASSIFICATION — PHASE 7
+════════════════════════════════════════════════════════ */
+let fuelMarkers = [];
+let isScanning  = false;
+let fuelData    = [];
+
+const FUEL_TIER_COL = {
+    critical: {hex:'#ff2200', rgb:'255,34,0'},
+    high:     {hex:'#ff8c00', rgb:'255,140,0'},
+    moderate: {hex:'#ffdd00', rgb:'255,221,0'},
+    low:      {hex:'#44cc44', rgb:'68,204,68'},
+};
+const _fuelTier = p => p<=2?'critical':p<=4?'high':p<=6?'moderate':'low';
+
+function setScanStatus(msg) {
+    const el=$('scan-status'); if(el) el.textContent=msg?'· '+msg:'';
+    const btn=$('scan-btn');
+    if(!btn)return;
+    if(msg){ btn.textContent=msg; btn.classList.add('scanning'); }
+    else   { btn.textContent='⬡ SCAN FUEL'; btn.classList.remove('scanning'); }
+}
+
+function _mockFuelData() {
+    return [
+        {fuel_type:'dead_grass',         flammability:'EXTREME',  priority:1, box_2d:[420,310,580,490], position:'2m ahead',          action:'Scrape to mineral soil'},
+        {fuel_type:'pine_needle_litter', flammability:'EXTREME',  priority:2, box_2d:[310,120,490,310], position:'3m, slightly left',  action:'Rake and remove'},
+        {fuel_type:'dead_brush',         flammability:'HIGH',     priority:3, box_2d:[210,510,450,760], position:'4m, right',          action:'Cut and remove'},
+        {fuel_type:'fallen_branches',    flammability:'HIGH',     priority:4, box_2d:[610,210,800,460], position:'5m ahead',           action:'Cut and remove'},
+        {fuel_type:'chaparral',          flammability:'MODERATE', priority:5, box_2d:[110,610,360,900], position:'6m, far right',      action:'Cut at ground level'},
+    ];
+}
+
+async function _dummyJpeg() {
+    const c=document.createElement('canvas'); c.width=64; c.height=64;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#3d2200'; ctx.fillRect(0,0,64,64);
+    ctx.fillStyle='#7a5c30';
+    for(let i=0;i<20;i++) ctx.fillRect(Math.random()*58,Math.random()*58,3+Math.random()*5,2);
+    return new Promise(res=>c.toBlob(b=>b.arrayBuffer().then(res),'image/jpeg',0.7));
+}
+
+function _makeGlowTex(priority) {
+    const col=FUEL_TIER_COL[_fuelTier(priority)].rgb;
+    const c=document.createElement('canvas'); c.width=c.height=128;
+    const ctx=c.getContext('2d');
+    const g=ctx.createRadialGradient(64,64,0,64,64,64);
+    g.addColorStop(0,   `rgba(${col},1.0)`);
+    g.addColorStop(0.30,`rgba(${col},0.70)`);
+    g.addColorStop(0.65,`rgba(${col},0.18)`);
+    g.addColorStop(1,   `rgba(${col},0)`);
+    ctx.fillStyle=g; ctx.fillRect(0,0,128,128);
+    return new THREE.CanvasTexture(c);
+}
+
+function _makeLabelTex(item) {
+    const col=FUEL_TIER_COL[_fuelTier(item.priority)].hex;
+    const c=document.createElement('canvas'); c.width=400; c.height=84;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='rgba(0,0,0,0.80)';
+    ctx.beginPath(); ctx.roundRect(2,2,396,80,8); ctx.fill();
+    ctx.strokeStyle=col; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.roundRect(2,2,396,80,8); ctx.stroke();
+    ctx.textAlign='center';
+    ctx.font='bold 18px "Courier New"'; ctx.fillStyle='#ffffff';
+    ctx.fillText(item.fuel_type.replace(/_/g,' ').toUpperCase(),200,26);
+    ctx.font='13px "Courier New"'; ctx.fillStyle=col;
+    ctx.fillText((item.position||'ahead')+' · '+(item.action||'').substring(0,28),200,52);
+    ctx.font='11px "Courier New"'; ctx.fillStyle='rgba(255,255,255,0.45)';
+    ctx.fillText('PRIORITY '+item.priority+' · '+item.flammability,200,74);
+    ctx.textAlign='left';
+    return new THREE.CanvasTexture(c);
+}
+
+function boxToWorldPosition(box, cam, distance=4.0) {
+    const cx=((box[1]+box[3])/2/1000)*2-1;
+    const cy=-(((box[0]+box[2])/2/1000)*2-1);
+    const v=new THREE.Vector3(cx,cy,-1).unproject(cam);
+    v.sub(cam.position).normalize();
+    return cam.position.clone().add(v.multiplyScalar(distance));
+}
+
+function _createMarker(item, worldPos) {
+    const group=new THREE.Group(); group.position.copy(worldPos);
+    const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:_makeGlowTex(item.priority),transparent:true,depthWrite:false}));
+    glow.scale.setScalar(0.46); glow.userData.pulse=true; group.add(glow);
+    const label=new THREE.Sprite(new THREE.SpriteMaterial({map:_makeLabelTex(item),transparent:true,depthWrite:false}));
+    label.scale.set(0.92,0.19,1); label.position.set(0,0.40,0); group.add(label);
+    scene3.add(group); return group;
+}
+
+function _clearMarkers(cb) {
+    const old=[...fuelMarkers]; fuelMarkers=[];
+    if(!old.length){cb&&cb();return;}
+    let op=1.0;
+    const id=setInterval(()=>{
+        op-=0.14;
+        old.forEach(g=>g.children.forEach(s=>{if(s.material)s.material.opacity=Math.max(0,op);}));
+        if(op<=0){old.forEach(g=>scene3.remove(g));clearInterval(id);cb&&cb();}
+    },20);
+}
+
+function _fadeInMarkers(markers) {
+    let op=0;
+    const id=setInterval(()=>{
+        op+=0.08;
+        markers.forEach(g=>g.children.forEach(s=>{if(s.material)s.material.opacity=Math.min(1,op);}));
+        if(op>=1)clearInterval(id);
+    },20);
+}
+
+function _placeVRMarkers(data) {
+    const fresh=data.map((item,i)=>{
+        const angle=(i/data.length)*Math.PI*2+Math.random()*0.5;
+        const r=3+Math.random()*4;
+        const pos=new THREE.Vector3(
+            camera3.position.x+Math.cos(angle)*r,
+            camera3.position.y-1.35+Math.random()*0.3,
+            camera3.position.z+Math.sin(angle)*r
+        );
+        const m=_createMarker(item,pos);
+        m.children.forEach(s=>{if(s.material)s.material.opacity=0;});
+        return m;
+    });
+    fuelMarkers=fresh; _fadeInMarkers(fresh);
+}
+
+function _showFuelPanel(data) {
+    fuelData=data;
+    const icons={critical:'🔴',high:'🟠',moderate:'🟡',low:'🟢'};
+    $('fuel-list').innerHTML=data.slice(0,6).map((item,i)=>`
+<div class="fuel-item">
+  <span class="fuel-num">${i+1}</span>
+  <span>${icons[_fuelTier(item.priority)]}</span>
+  <div><span class="fuel-name">${item.fuel_type.replace(/_/g,' ')}</span>
+  <div class="fuel-detail">${item.position||''} → ${item.action||''}</div></div>
+</div>`).join('');
+    $('fuel-panel').style.display='';
+}
+
+function _speakTopFuel(data) {
+    if(!data||!data.length)return;
+    const t=data[0];
+    speechMgr.speak(`Priority target: ${t.fuel_type.replace(/_/g,' ')}, ${t.position||'ahead'}. ${t.action||'clear it'}.`);
+}
+
+async function scanFuel() {
+    if(isScanning||!scene3)return;
+    isScanning=true; setScanStatus('SCANNING...');
+
+    if(activeMode==='vr'){
+        _clearMarkers(()=>{
+            const data=_mockFuelData();
+            _placeVRMarkers(data); _showFuelPanel(data); _speakTopFuel(data);
+            setScanStatus(''); isScanning=false;
+        });
+        return;
+    }
+
+    try {
+        const body=await _dummyJpeg();
+        const res=await fetch(`${SENSOR_SERVER}/analyze-fuel`,{
+            method:'POST',
+            headers:{'Content-Type':'image/jpeg'},
+            body,
+            signal:AbortSignal.timeout(15000),
+        });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data=await res.json();
+
+        _clearMarkers(()=>{
+            if(!data.length){
+                setScanStatus('NO FUELS DETECTED');
+                setTimeout(()=>{setScanStatus('');isScanning=false;},3000);
+                return;
+            }
+            const fresh=data.map(item=>{
+                const pos=boxToWorldPosition(item.box_2d,camera3);
+                const m=_createMarker(item,pos);
+                m.children.forEach(s=>{if(s.material)s.material.opacity=0;});
+                return m;
+            });
+            fuelMarkers=fresh; _fadeInMarkers(fresh);
+            _showFuelPanel(data); _speakTopFuel(data);
+            setScanStatus(''); isScanning=false;
+        });
+    } catch(e){
+        console.warn('Fuel scan:',e.message);
+        setScanStatus('SCAN FAILED');
+        setTimeout(()=>{setScanStatus('');isScanning=false;},3000);
+    }
+}
 
 /* ═══════════════════════════════════════════════════════
    MODE ENTRY
@@ -815,6 +1036,11 @@ pollSensors();
 setInterval(pollSensors,  SENSOR_POLL_MS);
 setInterval(fireTick,     FIRE_TICK_MS);
 setInterval(updateTimers, 1000);
+
+// Keyboard shortcut: F = scan fuel
+document.addEventListener('keydown', e=>{
+    if((e.key==='f'||e.key==='F')&&!e.ctrlKey&&!e.metaKey) scanFuel();
+});
 
 // 5-minute status update in yellow/orange tier
 setInterval(()=>{
