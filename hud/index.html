@@ -251,7 +251,8 @@ class FireGrid{
 const SENSOR_SERVER   = 'http://localhost:8080';
 const PANORAMA_URL    = 'panorama.jpg';
 const SENSOR_POLL_MS  = 2000;
-const FIRE_TICK_MS    = 500;
+const FIRE_TICK_MS         = 1000;   // 1 tick per real second = 1 simulated minute
+const FIRE_REALTIME_RATIO  = 1000;   // ms per simulated minute
 const DEMO_WIND_DIR   = 45;
 const DEMO_WIND_SPEED = 15;
 const DEMO_SEED       = 42;
@@ -503,12 +504,34 @@ function renderFire(cells) {
     const fx=FIGHTER_X*CELL_PX+CELL_PX/2, fy=FIGHTER_Y*CELL_PX+CELL_PX/2;
     fctx.beginPath(); fctx.arc(fx,fy,6,0,Math.PI*2); fctx.fillStyle='#0088ff'; fctx.fill();
     fctx.strokeStyle='#ffffff'; fctx.lineWidth=2; fctx.stroke();
+
+    // Teammate dots FF-1..FF-4
+    const GS=GRID_SIZE*CELL_PX;
+    [[0.30,0.28],[0.68,0.22],[0.22,0.70],[0.72,0.65]].forEach(([tx2,ty2],i)=>{
+        const tmx=tx2*GS, tmy=ty2*GS;
+        fctx.beginPath(); fctx.arc(tmx,tmy,5,0,Math.PI*2); fctx.fillStyle='#00cc44'; fctx.fill();
+        fctx.strokeStyle='#ffffff'; fctx.lineWidth=1.5; fctx.stroke();
+        fctx.font='bold 7px Courier New'; fctx.fillStyle='#ffffff'; fctx.textAlign='center';
+        fctx.fillText('FF-'+(i+1),tmx,tmy-8); fctx.textAlign='left';
+    });
+
+    // Wind arrow
     const rad=DEMO_WIND_DIR*Math.PI/180, vx=Math.sin(rad), vy=-Math.cos(rad);
-    const W2=GRID_SIZE*CELL_PX, ox=W2-16, oy=16, len=16, tx=ox+vx*len, ty=oy+vy*len, ang=Math.atan2(vy,vx);
+    const W2=GRID_SIZE*CELL_PX, ox=W2-16, oy=16, len=16, wtx=ox+vx*len, wty=oy+vy*len, ang=Math.atan2(vy,vx);
     fctx.save(); fctx.strokeStyle='#ffdd00'; fctx.fillStyle='#ffdd00'; fctx.lineWidth=2;
-    fctx.beginPath(); fctx.moveTo(ox,oy); fctx.lineTo(tx,ty); fctx.stroke();
-    fctx.beginPath(); fctx.moveTo(tx,ty); fctx.lineTo(tx-7*Math.cos(ang-0.4),ty-7*Math.sin(ang-0.4)); fctx.lineTo(tx-7*Math.cos(ang+0.4),ty-7*Math.sin(ang+0.4)); fctx.closePath(); fctx.fill();
+    fctx.beginPath(); fctx.moveTo(ox,oy); fctx.lineTo(wtx,wty); fctx.stroke();
+    fctx.beginPath(); fctx.moveTo(wtx,wty); fctx.lineTo(wtx-7*Math.cos(ang-0.4),wty-7*Math.sin(ang-0.4)); fctx.lineTo(wtx-7*Math.cos(ang+0.4),wty-7*Math.sin(ang+0.4)); fctx.closePath(); fctx.fill();
     fctx.font='bold 8px Courier New'; fctx.fillStyle='#ffdd00'; fctx.textAlign='center'; fctx.fillText('WIND',ox,oy+11); fctx.textAlign='left'; fctx.restore();
+
+    // Legend
+    fctx.save();
+    const lx=4, ly=GS-36;
+    [['#0088ff','YOU'],['#00cc44','TEAM'],['#ff5000','FIRE']].forEach(([col,txt],i)=>{
+        const liy=ly+i*12;
+        fctx.beginPath(); fctx.arc(lx+4,liy,3,0,Math.PI*2); fctx.fillStyle=col; fctx.fill();
+        fctx.font='7px Courier New'; fctx.fillStyle='rgba(255,255,255,0.70)'; fctx.fillText(txt,lx+11,liy+3);
+    });
+    fctx.restore();
 }
 
 /* ── SCRUBBER ────────────────────────────────────────── */
@@ -556,6 +579,7 @@ function fireTick() {
 /* ── MAYDAY ──────────────────────────────────────────── */
 function triggerMayday() {
     if(maydayFired)return; maydayFired=true;
+    maydayFlashUntil=Date.now()+3000;
     $('mayday-btn').classList.add('activated');
     $('mayday-btn').innerHTML='MAYDAY<br>SENT';
     showAlert('MAYDAY ACTIVATED — COORDINATES SENT','critical');
@@ -566,11 +590,11 @@ function triggerMayday() {
 /* ═══════════════════════════════════════════════════════
    THREE.JS SCENE
 ════════════════════════════════════════════════════════ */
-let renderer3, scene3, camera3, orbitControls3;
-let particles=[];
-let vrHudGroup=null;
+let renderer3, scene3, camera3;
+let vrHudGroup=null, vrAlertPlane=null;
 let vrVitalsTex=null, vrFireTex=null, vrTimersTex=null, vrAlertTex=null;
 let vrVitalsC=null, vrTimersC=null, vrAlertC=null;
+let maydayFlashUntil=0;
 
 function initThreeScene() {
     const canvas=$('xr-canvas');
@@ -584,7 +608,9 @@ function initThreeScene() {
     camera3.position.set(0,1.6,0);
 
     buildPanorama();
-    buildParticles();
+    buildGroundPlane();
+    buildVegetation();  // async, fire-and-forget
+    scene3.fog = new THREE.Fog(0xb4a08c, 30, 80);
 
     window.addEventListener('resize',()=>{
         camera3.aspect=window.innerWidth/window.innerHeight;
@@ -596,7 +622,7 @@ function initThreeScene() {
 /* Panorama sphere */
 function buildPanorama() {
     const geo=new THREE.SphereGeometry(500,60,40);
-    const mat=new THREE.MeshBasicMaterial({side:THREE.BackSide});
+    const mat=new THREE.MeshBasicMaterial({side:THREE.BackSide,fog:false});
     mat.map=makeFallbackTex(); // show immediately
     new THREE.TextureLoader().load(PANORAMA_URL,
         tex=>{mat.map=tex;mat.needsUpdate=true;},
@@ -610,79 +636,107 @@ function makeFallbackTex() {
     const c=document.createElement('canvas'); c.width=2048; c.height=1024;
     const ctx=c.getContext('2d');
     const g=ctx.createLinearGradient(0,0,0,1024);
-    g.addColorStop(0,'#100400'); g.addColorStop(0.30,'#2d0e00'); g.addColorStop(0.52,'#581800');
-    g.addColorStop(0.68,'#a03000'); g.addColorStop(0.80,'#c85000'); g.addColorStop(1.00,'#1a0800');
+    g.addColorStop(0,'#87CEEB');
+    g.addColorStop(0.45,'#B8D4E8');
+    g.addColorStop(0.65,'#D4A96A');
+    g.addColorStop(0.80,'#C4955A');
+    g.addColorStop(0.90,'#8B7355');
+    g.addColorStop(1.00,'#6B8B4A');
     ctx.fillStyle=g; ctx.fillRect(0,0,2048,1024);
-    // orange glow pools
-    [350,800,1300,1700,200].forEach((bx,i)=>{
-        const by=660+Math.sin(i*1.4)*70;
-        const rg=ctx.createRadialGradient(bx,by,0,bx,by,240);
-        rg.addColorStop(0,'rgba(255,110,0,0.30)'); rg.addColorStop(1,'rgba(255,50,0,0)');
-        ctx.fillStyle=rg; ctx.fillRect(0,0,2048,1024);
-    });
-    // silhouette treeline
-    ctx.fillStyle='#0a0400';
+    ctx.fillStyle='rgba(80,70,55,0.55)';
     for(let x=0;x<2048;x+=3){
-        const h=110+Math.sin(x*0.025)*35+Math.sin(x*0.075)*18;
-        ctx.fillRect(x,1024-Math.round(h),3,Math.round(h));
+        const h=80+Math.sin(x*0.018)*30+Math.sin(x*0.055)*14;
+        ctx.fillRect(x,1024-Math.round(h*1.3)-80,3,Math.round(h*1.3));
     }
     return new THREE.CanvasTexture(c);
 }
 
-/* Particle sprites */
-function makeFlametex() {
-    const c=document.createElement('canvas'); c.width=c.height=64;
+/* Vegetation billboards */
+function _vegFallback(type) {
+    const lrng=_mulberry32(type==='tree'?11:type==='shrub'?22:33);
+    const isDead=type==='dead'; const isTree=type==='tree';
+    const c=document.createElement('canvas');
+    c.width=isTree?128:96; c.height=isTree?256:128;
     const ctx=c.getContext('2d');
-    const g=ctx.createRadialGradient(32,32,0,32,32,32);
-    g.addColorStop(0,'rgba(255,220,80,1)'); g.addColorStop(0.25,'rgba(255,110,0,0.9)');
-    g.addColorStop(0.65,'rgba(200,35,0,0.45)'); g.addColorStop(1,'rgba(180,15,0,0)');
-    ctx.fillStyle=g; ctx.fillRect(0,0,64,64);
+    const hue=isDead?28+lrng()*15:100+lrng()*35;
+    const sat=isDead?35+lrng()*20:45+lrng()*25;
+    const lig=isDead?28+lrng()*12:22+lrng()*12;
+    ctx.fillStyle=`hsl(${hue},${sat}%,${lig}%)`;
+    const W=c.width,H=c.height;
+    ctx.beginPath();
+    for(let a=0;a<Math.PI*2;a+=0.25){
+        const wobble=0.65+lrng()*0.50;
+        const rx=(isTree?W*0.30:W*0.42)*wobble;
+        const ry=(isTree?H*0.42:H*0.40)*wobble;
+        const px=W/2+Math.cos(a)*rx;
+        const py=H*(isTree?0.45:0.50)+Math.sin(a)*ry;
+        a<0.01?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath(); ctx.fill();
     return new THREE.CanvasTexture(c);
 }
-
-function makeSmokeTex() {
-    const c=document.createElement('canvas'); c.width=c.height=64;
-    const ctx=c.getContext('2d');
-    const g=ctx.createRadialGradient(32,32,0,32,32,32);
-    g.addColorStop(0,'rgba(88,88,88,0.46)'); g.addColorStop(0.6,'rgba(60,60,60,0.20)'); g.addColorStop(1,'rgba(40,40,40,0)');
-    ctx.fillStyle=g; ctx.fillRect(0,0,64,64);
-    return new THREE.CanvasTexture(c);
-}
-
-function buildParticles() {
-    const ftex=makeFlametex(), stex=makeSmokeTex();
-    // 300 flame sprites
-    for(let i=0;i<300;i++){
-        const s=new THREE.Sprite(new THREE.SpriteMaterial({map:ftex,transparent:true,depthWrite:false}));
-        const angle=Math.random()*Math.PI*2, r=3+Math.random()*5;
-        s.position.set(Math.cos(angle)*r, Math.random()*0.3, Math.sin(angle)*r);
-        s.scale.setScalar(0.07+Math.random()*0.12);
-        s.userData={type:'flame',vy:0.003+Math.random()*0.005,angle,r,maxY:2.5+Math.random()*1.2};
-        scene3.add(s); particles.push(s);
-    }
-    // 100 smoke sprites
-    for(let i=0;i<100;i++){
-        const s=new THREE.Sprite(new THREE.SpriteMaterial({map:stex,transparent:true,depthWrite:false}));
-        const angle=Math.random()*Math.PI*2, r=2+Math.random()*7;
-        s.position.set(Math.cos(angle)*r, Math.random()*2+0.5, Math.sin(angle)*r);
-        s.scale.setScalar(0.14+Math.random()*0.24);
-        s.userData={type:'smoke',vy:0.001+Math.random()*0.002,angle,r,maxY:5+Math.random()*1.2};
-        scene3.add(s); particles.push(s);
-    }
-}
-
-function tickParticles() {
-    particles.forEach(p=>{
-        const u=p.userData; p.position.y+=u.vy;
-        if(u.type==='flame'){
-            p.material.opacity=0.3+Math.random()*0.6;
-            p.position.x=Math.cos(u.angle)*u.r+(Math.random()-0.5)*0.06;
-            p.position.z=Math.sin(u.angle)*u.r+(Math.random()-0.5)*0.06;
-        } else {
-            p.material.opacity=0.12+Math.random()*0.22;
-        }
-        if(p.position.y>u.maxY){ p.position.y=(u.type==='smoke'?0.4:0); }
+function _loadVegTex(path,type){
+    return new Promise(resolve=>{
+        new THREE.TextureLoader().load(path,tex=>{tex.premultiplyAlpha=true;resolve(tex);},undefined,()=>resolve(_vegFallback(type)));
     });
+}
+async function buildVegetation(){
+    const rng=_mulberry32(99);
+    const [tree1,tree2,tree3,shrub1,shrub2,shrub3,dead1,dead2]=await Promise.all([
+        _loadVegTex('hud/textures/tree1.png','tree'),
+        _loadVegTex('hud/textures/tree2.png','tree'),
+        _loadVegTex('hud/textures/tree3.png','tree'),
+        _loadVegTex('hud/textures/shrub1.png','shrub'),
+        _loadVegTex('hud/textures/shrub2.png','shrub'),
+        _loadVegTex('hud/textures/shrub3.png','shrub'),
+        _loadVegTex('hud/textures/dead_brush1.png','dead'),
+        _loadVegTex('hud/textures/dead_brush2.png','dead'),
+    ]);
+    const treeTex=[tree1,tree2,tree3],shrubTex=[shrub1,shrub2,shrub3],deadTex=[dead1,dead2];
+    const mkS=tex=>new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+    for(let i=0;i<35;i++){
+        const angle=rng()*Math.PI*2,r=5+rng()*20,h=3+rng()*3;
+        const s=mkS(treeTex[Math.floor(rng()*3)]);
+        s.position.set(Math.cos(angle)*r,h*0.5,Math.sin(angle)*r);
+        s.scale.set(h*0.55,h,1); scene3.add(s);
+    }
+    for(let i=0;i<55;i++){
+        const angle=rng()*Math.PI*2,r=2+rng()*13;
+        const isDead=rng()<0.40;
+        const tex=isDead?deadTex[Math.floor(rng()*2)]:shrubTex[Math.floor(rng()*3)];
+        const h=0.5+rng();
+        const s=mkS(tex);
+        s.position.set(Math.cos(angle)*r,h*0.5,Math.sin(angle)*r);
+        s.scale.set(h*1.2,h,1); scene3.add(s);
+    }
+    for(let i=0;i<12;i++){
+        const angle=rng()*Math.PI*2,r=1+rng()*4,h=0.25+rng()*0.35;
+        const s=mkS(deadTex[Math.floor(rng()*2)]);
+        s.position.set(Math.cos(angle)*r,h*0.5,Math.sin(angle)*r);
+        s.scale.set(h*2.5,h,1); scene3.add(s);
+    }
+}
+function buildGroundPlane(){
+    const geo=new THREE.PlaneGeometry(200,200);
+    const lrng=_mulberry32(77);
+    const c=document.createElement('canvas'); c.width=c.height=512;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#C4A060'; ctx.fillRect(0,0,512,512);
+    for(let i=0;i<800;i++){
+        const x=lrng()*512,y=lrng()*512,r=4+lrng()*18,pick=lrng();
+        ctx.fillStyle=pick<0.33?'#6B7B3A':pick<0.66?'#8B6914':'#A08040';
+        ctx.beginPath(); ctx.ellipse(x,y,r,r*0.6,lrng()*Math.PI,0,Math.PI*2); ctx.fill();
+    }
+    const fallbackTex=new THREE.CanvasTexture(c);
+    fallbackTex.wrapS=fallbackTex.wrapT=THREE.RepeatWrapping;
+    fallbackTex.repeat.set(10,10);
+    const mat=new THREE.MeshBasicMaterial({map:fallbackTex,side:THREE.FrontSide});
+    new THREE.TextureLoader().load('hud/textures/ground.jpg',
+        tex=>{tex.wrapS=tex.wrapT=THREE.RepeatWrapping;tex.repeat.set(10,10);mat.map=tex;mat.needsUpdate=true;},
+        undefined,()=>{}
+    );
+    const mesh=new THREE.Mesh(geo,mat);
+    mesh.rotation.x=-Math.PI/2; mesh.position.y=0; scene3.add(mesh);
 }
 
 /* VR HUD planes */
@@ -692,26 +746,36 @@ function initVRHUD() {
     vrAlertC =Object.assign(document.createElement('canvas'),{width:600,height:90});
 
     vrVitalsTex=new THREE.CanvasTexture(vrVitalsC);
-    vrFireTex  =new THREE.CanvasTexture(fcanvas);  // reuse live fire canvas
+    vrFireTex  =new THREE.CanvasTexture(fcanvas);
     vrTimersTex=new THREE.CanvasTexture(vrTimersC);
     vrAlertTex =new THREE.CanvasTexture(vrAlertC);
 
-    const mkPlane=(w,h,tex)=>new THREE.Mesh(
+    const mkPlane=(w,h,tex,op=0.70)=>new THREE.Mesh(
         new THREE.PlaneGeometry(w,h),
-        new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false,side:THREE.DoubleSide})
+        new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:op,depthTest:false,side:THREE.DoubleSide})
     );
+    const mdc=document.createElement('canvas'); mdc.width=mdc.height=128;
+    const mdx=mdc.getContext('2d');
+    mdx.fillStyle='rgba(150,0,0,0.88)'; mdx.beginPath(); mdx.arc(64,64,62,0,Math.PI*2); mdx.fill();
+    mdx.strokeStyle='#ff2222'; mdx.lineWidth=5; mdx.beginPath(); mdx.arc(64,64,62,0,Math.PI*2); mdx.stroke();
+    mdx.fillStyle='#ffffff'; mdx.font='bold 18px "Courier New"'; mdx.textAlign='center'; mdx.fillText('MAYDAY',64,72);
+    const mdTex=new THREE.CanvasTexture(mdc);
+
     vrHudGroup=new THREE.Group();
-    const vp=mkPlane(0.40,0.28,vrVitalsTex); vp.position.set(-0.35, 0.15,-0.70);
-    const fp=mkPlane(0.34,0.34,vrFireTex);   fp.position.set( 0.35, 0.15,-0.70);
-    const tp=mkPlane(0.50,0.09,vrTimersTex); tp.position.set( 0.00,-0.25,-0.70);
-    const ap=mkPlane(0.55,0.09,vrAlertTex);  ap.position.set( 0.00, 0.05,-0.80);
-    vrHudGroup.add(vp,fp,tp,ap);
+    const vp=mkPlane(0.24,0.17,vrVitalsTex); vp.position.set(-0.30, 0.22,-0.60);
+    const fp=mkPlane(0.20,0.20,vrFireTex);   fp.position.set( 0.30, 0.22,-0.60);
+    const tp=mkPlane(0.25,0.05,vrTimersTex); tp.position.set( 0.00,-0.30,-0.60);
+    const ap=mkPlane(0.44,0.07,vrAlertTex);  ap.position.set( 0.00, 0.08,-0.65); ap.visible=false;
+    const mp=mkPlane(0.09,0.09,mdTex,0.90);  mp.position.set( 0.30,-0.28,-0.60);
+    vrAlertPlane=ap;
+    vrHudGroup.add(vp,fp,tp,ap,mp);
     camera3.add(vrHudGroup);
-    scene3.add(camera3); // camera must be in scene for children to render
+    scene3.add(camera3);
 }
 
 /* VR panel drawing functions */
 function _panelBg(ctx,W,H,borderCol='rgba(0,210,155,0.45)') {
+    if(Date.now()<maydayFlashUntil) borderCol='rgba(255,40,40,0.90)';
     ctx.clearRect(0,0,W,H);
     ctx.fillStyle='rgba(0,0,0,0.83)';
     ctx.beginPath(); ctx.roundRect(2,2,W-4,H-4,10); ctx.fill();
@@ -766,6 +830,7 @@ function drawTimersVR() {
 
 function drawAlertVR() {
     const c=vrAlertC, ctx=c.getContext('2d'), W=c.width, H=c.height;
+    if(vrAlertPlane) vrAlertPlane.visible=!!currentAlertText;
     if(!currentAlertText){ ctx.clearRect(0,0,W,H); vrAlertTex.needsUpdate=true; return; }
     const bc=currentAlertLevel==='critical'?'rgba(255,40,40,0.90)':currentAlertLevel==='warning'?'rgba(255,200,0,0.80)':'rgba(0,180,255,0.70)';
     _panelBg(ctx,W,H,bc);
@@ -779,7 +844,6 @@ function drawAlertVR() {
 
 /* Three.js animation loop (VR + laptop) */
 function threeAnimate() {
-    tickParticles();
     if(vrHudGroup){ drawVitalsVR(); drawTimersVR(); drawAlertVR(); vrFireTex.needsUpdate=true; }
     // Pulse fuel markers
     const _pt=Date.now()/1000;
@@ -1062,7 +1126,7 @@ function enterLaptop() {
     cvs.addEventListener('touchmove', e=>{ if(!isDragging)return; const t=e.touches[0]; yaw-=(t.clientX-prevX)*0.25; pitch-=(t.clientY-prevY)*0.25; pitch=Math.max(-80,Math.min(80,pitch)); camera3.rotation.set(pitch*Math.PI/180,yaw*Math.PI/180,0,'YXZ'); prevX=t.clientX; prevY=t.clientY; },{passive:true});
     cvs.addEventListener('touchend',  ()=>isDragging=false);
 
-    renderer3.setAnimationLoop(()=>{ tickParticles(); renderer3.render(scene3,camera3); });
+    renderer3.setAnimationLoop(()=>{ renderer3.render(scene3,camera3); });
     $('xr-canvas').classList.add('active');
     $('landing').classList.add('hidden');
     document.body.style.background='transparent';
@@ -1181,9 +1245,10 @@ setInterval(updateTimers,    1000);
 setInterval(updateEvacRoute, 5000);
 setTimeout(updateEvacRoute,  2000);   // first run after fire has seeded a bit
 
-// Keyboard shortcut: F = scan fuel
+/// Keyboard shortcuts
 document.addEventListener('keydown', e=>{
     if((e.key==='f'||e.key==='F')&&!e.ctrlKey&&!e.metaKey) scanFuel();
+    if((e.key==='m'||e.key==='M')&&!e.ctrlKey&&!e.metaKey) triggerMayday();
 });
 
 // 5-minute status update in yellow/orange tier
