@@ -4,7 +4,7 @@
 
 🏆 Best Use of Gemini API
 
-SolSpecs is a real-time biometric and situational-awareness system for wildland firefighters. A wearable sensor armband (Arduino UNO Q) streams heart rate, SpO₂, skin temperature, sweat, and IMU data over WiFi to a Python state machine that fuses the signals into an OSHA-compliant heat stress tier (green → yellow → orange → red). The computed state is served over HTTP/HTTPS to a Meta Quest 3 browser, which renders a Three.js VR panorama with a fire-spread simulation, live vitals HUD panels, AI-powered fuel classification overlays, Dijkstra evacuation routing, and Web Speech API voice alerts.
+FireForce is a real-time biometric and situational-awareness system for wildland firefighters. A wearable sensor armband (Arduino UNO Q) streams heart rate, SpO₂, skin temperature, sweat, and IMU data over WiFi to a Python state machine that fuses the signals into an OSHA-compliant heat stress tier (green → yellow → orange → red). The computed state is served over HTTP/HTTPS to a Meta Quest 3 browser, which renders a Three.js VR panorama with a fire-spread simulation, live vitals HUD panels, AI-powered fuel classification overlays, Dijkstra evacuation routing, and Web Speech API voice alerts.
 
 ---
 
@@ -26,8 +26,8 @@ SolSpecs is a real-time biometric and situational-awareness system for wildland 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/Sanjith-Shan/SolSpecs.git
-cd SolSpecs
+git clone https://github.com/Sanjith-Shan/FireForce.git
+cd FireForce
 pip install -r requirements.txt
 ```
 
@@ -148,7 +148,7 @@ UNO Q armband
 ## Project structure
 
 ```
-SolSpecs/
+FireForce/
 ├── main.py                   # Entry point — wires all subsystems + Flask server
 ├── config.py                 # All thresholds, ports, API keys
 ├── requirements.txt
